@@ -1,47 +1,32 @@
-Zemuframeweb
+<div id="editor" class="animate__animated animate__fadeIn animate__delay-1s">&lt;input type="file" id="zipInput"&gt;
+&lt;div id="error" style="color:red"&gt;&lt;/div&gt;
+&lt;iframe id="preview" style="width:100%; height:300px"&gt;&lt;/iframe&gt;
 
-Emulador web para projetos ZIP com sites HTML.
-Renderiza tudo dentro de um <iframe> como se fosse um servidor real.
+&lt;script src="https://cdn-zemuframeweb.netlify.app/zemuframeweb.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  async function renderZip() {
+    const input = document.getElementById('zipInput');
+    const iframe = document.getElementById('preview');
+    const errorDiv = document.getElementById('error');
 
--------------------------------------
-Como usar:
+    errorDiv.style.display = 'none';
+    errorDiv.textContent = '';
 
-1. Importe o Zemuframeweb
+    const file = input.files[0];
+    if (!file) {
+      errorDiv.textContent = 'Por favor, selecione um arquivo ZIP.';
+      errorDiv.style.display = 'block';
+      return;
+    }
 
-2. Use a função principal:
+    try {
+      await Zemuframeweb(file, iframe);
+    } catch (error) {
+      errorDiv.textContent = error.message;
+      errorDiv.style.display = 'block';
+      console.error(error);
+    }
+  }
 
-Zemuframeweb(arquivoZip, idDoIframe);
-
-- arquivoZip: o arquivo .zip vindo de um <input type="file">
-- idDoIframe: o ID do <iframe> onde o site será carregado
-
-Exemplo completo:
-
-<input type="file" id="zipInput">
-<iframe id="visor" style="width: 100%; height: 500px;"></iframe>
-
-<script>
-    zipInput.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (file) Zemuframeweb(file, 'visor');
-    });
-</script>
-
--------------------------------------
-O que ele faz:
-
-- Procura automaticamente o arquivo index.html no ZIP
-- Emula fetch, XHR e navegação interna (<a href="...">)
-- Converte todos os arquivos do ZIP em blob URLs
-- Funciona 100% offline direto no navegador
-
--------------------------------------
-Requisitos:
-
-- ZIP deve conter um index.html
-- Deve estar tudo com caminhos relativos corretos (como num site real)
-
--------------------------------------
-Licença:
-
-MIT License
+  document.getElementById('zipInput').addEventListener('change', renderZip);
+&lt;/script&gt;</div>
