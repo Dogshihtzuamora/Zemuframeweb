@@ -1,5 +1,8 @@
-<div id="editor" class="animate__animated animate__fadeIn animate__delay-1s">&lt;input type="file" id="zipInput"&gt;
+<div>
+  &lt;input type="file" id="zipInput"&gt;
+  
 &lt;div id="error" style="color:red"&gt;&lt;/div&gt;
+
 &lt;iframe id="preview" style="width:100%; height:300px"&gt;&lt;/iframe&gt;
 
 &lt;script src="https://cdn-zemuframeweb.netlify.app/zemuframeweb.js"&gt;&lt;/script&gt;
