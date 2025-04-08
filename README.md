@@ -6,9 +6,7 @@ Renderiza tudo dentro de um <iframe> como se fosse um servidor real.
 -------------------------------------
 Como usar:
 
-1. Importe a CDN do JSZip:
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+1. Importe o Zemuframeweb
 
 2. Use a função principal:
 
