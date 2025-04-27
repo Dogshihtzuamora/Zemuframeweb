@@ -1,299 +1,274 @@
 async function loadJSZip() {
-    return new Promise((resolve, reject) => {
-        if (typeof JSZip !== 'undefined') {           
-            resolve();
-            return;
-        }
+    if (typeof JSZip !== 'undefined') return Promise.resolve();
 
+    return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
-        script.onload = () => resolve();
+        script.onload = resolve;
         script.onerror = () => reject(new Error('Falha ao carregar JSZip da CDN'));
         document.head.appendChild(script);
     });
 }
 
+const fileCache = {};
+let currentBasePath = '';
 
-async function Zemuframeweb(file, iframeElement) {
-await loadJSZip();
-    if (!(file instanceof File) || !iframeElement instanceof HTMLIFrameElement) {
-        throw new Error('Parâmetros inválidos: file deve ser um File e iframeElement um HTMLIFrameElement.');
+function resolvePath(path, basePath) {
+    if (!path) return '';
+    if (path.startsWith('/')) return path.substring(1);
+
+    const base = basePath ? getBasePath(basePath) : '';
+    const stack = base ? base.split('/') : [];
+    const parts = path.split('/');
+
+    for (const part of parts) {
+        if (part === '.') continue;
+        else if (part === '..') stack.pop();
+        else stack.push(part);
     }
 
-    if (file.type !== 'application/zip' && !file.name.endsWith('.zip')) {
-        throw new Error('Por favor, selecione um arquivo ZIP válido.');
-    }
+    return stack.join('/');
+}
 
-    let fileCache = {};
-    let currentBasePath = ''; 
+function getBasePath(path) {
+    return path.split('/').slice(0, -1).join('/');
+}
 
-    const doc = iframeElement.contentDocument || iframeElement.contentWindow.document;
-    doc.open();
-    doc.write('');
-    doc.close();
-
-    const arrayBuffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
+function interceptFetch(doc) {
+    const originalFetch = doc.defaultView.fetch;
+    const originalXHROpen = doc.defaultView.XMLHttpRequest.prototype.open;
+    const originalXHRSend = doc.defaultView.XMLHttpRequest.prototype.send;
    
-    for (const [path, zipEntry] of Object.entries(zip.files)) {
-        if (!zipEntry.dir) {
-            fileCache[path] = await zipEntry.async('blob');
-        }
-    }
+    doc.defaultView.fetch = async (input, init) => {
+        try {
+            const url = typeof input === 'string' ? input : input.url;
+            const resolvedPath = resolvePath(url, currentBasePath);
 
-    if (!hasFile('index.html')) {
-        throw new Error('Não foi encontrado um arquivo index.html no ZIP.');
-    }
-
-    await loadFile('index.html');
-
-    function hasFile(path) {
-        return Object.keys(fileCache).some(filePath => filePath === path || filePath.endsWith('/' + path));
-    }
-
-    async function getFile(path) {
-        let resolvedPath = null;
-
-        if (fileCache[path]) resolvedPath = path;
-        else {
-            const fullPath = joinPaths(currentBasePath, path);
-            if (fileCache[fullPath]) resolvedPath = fullPath;
-            else {
-                for (const filePath in fileCache) {
-                    if (filePath === path || filePath.endsWith('/' + path)) {
-                        resolvedPath = filePath;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!resolvedPath) {
-            throw new Error(`Arquivo não encontrado: ${path}`);
-        }
-
-        return fileCache[resolvedPath];
-    }
-
-    function joinPaths(base, relative) {
-        if (!base || relative.startsWith('/')) {
-            return relative.startsWith('/') ? relative.substring(1) : relative;
-        }
-        const stack = base.split('/').slice(0, -1);
-        const parts = relative.split('/');
-        for (const part of parts) {
-            if (part === '.') continue;
-            if (part === '..') stack.pop();
-            else stack.push(part);
-        }
-        return stack.join('/');
-    }
-
-    function getBasePath(path) {
-        return path.split('/').slice(0, -1).join('/');
-    }
-
-    function getContentType(extension) {
-        const mimeTypes = {
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'gif': 'image/gif',
-            'svg': 'image/svg+xml',
-            'webp': 'image/webp',
-            'js': 'application/javascript',
-            'html': 'text/html',
-            'css': 'text/css',
-            'json': 'application/json',
-            'txt': 'text/plain'
-        };
-        return mimeTypes[extension.toLowerCase()] || 'application/octet-stream';
-    }
-
-    async function loadFile(filePath) {
-        const blob = await getFile(filePath);
-        currentBasePath = getBasePath(filePath);
-
-        if (filePath.endsWith('.html')) {
-            const htmlText = await blob.text();
-            const parser = new DOMParser();
-            const parsedDoc = parser.parseFromString(htmlText, 'text/html');
-            const iframeDoc = iframeElement.contentDocument || iframeElement.contentWindow.document;
-           
-            const blobUrlMap = {};
-            for (const path in fileCache) {
-                if (path !== filePath) {
-                    blobUrlMap[path] = URL.createObjectURL(fileCache[path]);
-                }
+            if (fileCache[resolvedPath]) {
+                const blob = fileCache[resolvedPath];
+                const response = new Response(blob, {
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {
+                        'Content-Type': getMimeType(resolvedPath),
+                    },
+                });
+                return Promise.resolve(response);
             }
 
-            parsedDoc.querySelectorAll('link[rel="stylesheet"]').forEach(link => {
-                const href = link.getAttribute('href');
-                if (href && !href.startsWith('http') && !href.startsWith('data:')) {
-                    const resolvedPath = resolvePath(href, filePath);
-                    if (blobUrlMap[resolvedPath]) {
-                        link.setAttribute('href', blobUrlMap[resolvedPath]);
-                    }
-                }
-            });
-
-            parsedDoc.querySelectorAll('script[src]').forEach(script => {
-                const src = script.getAttribute('src');
-                if (src && !src.startsWith('http') && !src.startsWith('data:')) {
-                    const resolvedPath = resolvePath(src, filePath);
-                    if (blobUrlMap[resolvedPath]) {
-                        script.setAttribute('src', blobUrlMap[resolvedPath]);
-                    }
-                }
-            });
-
-            parsedDoc.querySelectorAll('img[src]').forEach(img => {
-                const src = img.getAttribute('src');
-                if (src && !src.startsWith('http') && !src.startsWith('data:')) {
-                    const resolvedPath = resolvePath(src, filePath);
-                    if (blobUrlMap[resolvedPath]) {
-                        img.setAttribute('src', blobUrlMap[resolvedPath]);
-                    }
-                }
-            });
-
-            parsedDoc.querySelectorAll('a[href]').forEach(a => {
-                const href = a.getAttribute('href');
-                if (href && !href.startsWith('http') && !href.startsWith('#') && !href.startsWith('data:')) {
-                    a.onclick = (e) => {
-                        e.preventDefault();
-                        const resolvedPath = resolvePath(href, filePath);
-                        if (fileCache[resolvedPath]) {
-                            loadFile(resolvedPath);
-                        }
-                    };
-                }
-            });
-
-            iframeDoc.open();
-            iframeDoc.write('<!DOCTYPE html><html>' + parsedDoc.documentElement.innerHTML + '</html>');
-            iframeDoc.close();
-        } else {
-           
-            const iframeDoc = iframeElement.contentDocument || iframeElement.contentWindow.document;
-            iframeDoc.open();
-            iframeDoc.write(`<pre>Conteúdo binário: ${filePath}</pre>`);
-            iframeDoc.close();
+            return originalFetch(input, init);
+        } catch (error) {
+            console.error('Erro ao interceptar fetch:', error);
+            throw error;
         }
-    }
-
-    function resolvePath(src, baseFile) {
-        const baseDir = getBasePath(baseFile);
-        return joinPaths(baseDir, src);
-    }
-
-    const iframeWindow = iframeElement.contentWindow;
-    
-    iframeWindow.onpopstate = (event) => {
-        const path = event.state ? event.state.path : 'index.html';
-        loadFile(path);
     };
 
-    const originalFetch = iframeWindow.fetch;
-    iframeWindow.fetch = async (url, options) => {
-        if (typeof url === 'string' && !url.startsWith('http') && !url.startsWith('data:')) {
-            try {
-                const resolvedPath = resolvePath(url, currentBasePath);
-                const file = await getFile(resolvedPath);
-                const extension = resolvedPath.split('.').pop().toLowerCase();
-                const contentType = getContentType(extension);
-                return new Response(file, { headers: { 'Content-Type': contentType } });
-            } catch (error) {
-                console.error(`Fetch falhou para ${url}: ${error.message}`);
-                return new Response(null, { status: 404, statusText: 'Not Found' });
-            }
-        }
-        return originalFetch.call(iframeWindow, url, options);
+   
+    doc.defaultView.XMLHttpRequest.prototype.open = function (method, url, async = true, user, password) {
+        this._interceptedUrl = resolvePath(url, currentBasePath);
+        this._isAsync = async;
+        originalXHROpen.call(this, method, url, async, user, password);
     };
 
-    const originalXHR = iframeWindow.XMLHttpRequest;
-    iframeWindow.XMLHttpRequest = function () {
-        const xhr = new originalXHR();
-        const originalOpen = xhr.open;
-        xhr.open = function (method, url, async = true, user, password) {
-            this._url = url;
-            originalOpen.call(this, method, url, async, user, password);
-        };
+    doc.defaultView.XMLHttpRequest.prototype.send = function (body) {
+        if (fileCache[this._interceptedUrl]) {
+            const blob = fileCache[this._interceptedUrl];
+            const mimeType = getMimeType(this._interceptedUrl);
 
-        let _responseType = '';
-        Object.defineProperty(xhr, 'responseType', {
-            get: () => _responseType,
-            set: newValue => { _responseType = newValue; }
-        });
-
-        xhr.send = function (body) {
-            const url = this._url;
-            if (typeof url === 'string' && !url.startsWith('http') && !url.startsWith('data:')) {
-                const resolvedPath = resolvePath(url, currentBasePath);
-                getFile(resolvedPath).then(file => {
-                    const extension = resolvedPath.split('.').pop().toLowerCase();
-                    const contentType = getContentType(extension);
+            if (this._isAsync) {
+               
+                const reader = new FileReader();
+                reader.onload = () => {
+                    Object.defineProperty(this, 'responseText', { value: reader.result });
+                    Object.defineProperty(this, 'response', { value: reader.result });
                     Object.defineProperty(this, 'status', { value: 200 });
                     Object.defineProperty(this, 'statusText', { value: 'OK' });
-                    Object.defineProperty(this, 'getResponseHeader', {
-                        value: (header) => header === 'Content-Type' ? contentType : null
-                    });
+                    Object.defineProperty(this, 'readyState', { value: 4 });
 
-                    if (_responseType === 'blob') {
-                        Object.defineProperty(this, 'response', { value: file });
-                    } else if (_responseType === 'arraybuffer') {
-                        file.arrayBuffer().then(buffer => {
-                            Object.defineProperty(this, 'response', { value: buffer });
-                            this.dispatchEvent(new Event('load'));
-                        });
-                        return;
-                    } else if (_responseType === 'json') {
-                        file.text().then(text => {
-                            try {
-                                const json = JSON.parse(text);
-                                Object.defineProperty(this, 'response', { value: json });
-                                Object.defineProperty(this, 'responseText', { value: text });
-                            } catch (e) {
-                                Object.defineProperty(this, 'response', { value: null });
-                                Object.defineProperty(this, 'responseText', { value: text });
-                            }
-                            this.dispatchEvent(new Event('load'));
-                        });
-                        return;
-                    } else {
-                        file.text().then(text => {
-                            Object.defineProperty(this, 'responseText', { value: text });
-                            Object.defineProperty(this, 'response', { value: text });
-                            this.dispatchEvent(new Event('load'));
-                        });
-                        return;
+                    if (this.onreadystatechange) {
+                        this.onreadystatechange();
                     }
-
-                    this.dispatchEvent(new Event('load'));
-                }).catch(error => {
-                    console.error(`XHR falhou para ${url}: ${error.message}`);
-                    Object.defineProperty(this, 'status', { value: 404 });
-                    Object.defineProperty(this, 'statusText', { value: 'Not Found' });
-                    this.dispatchEvent(new Event('error'));
-                    this.dispatchEvent(new Event('load'));
-                });
+                };
+                reader.readAsText(blob);
             } else {
-                xhr.send(body);
-            }
-        };
+               
+                const syncReader = new XMLHttpRequest();
+                syncReader.open('GET', URL.createObjectURL(blob), false); 
+                syncReader.send();
 
-        return xhr;
+                Object.defineProperty(this, 'responseText', { value: syncReader.responseText });
+                Object.defineProperty(this, 'response', { value: syncReader.responseText });
+                Object.defineProperty(this, 'status', { value: 200 });
+                Object.defineProperty(this, 'statusText', { value: 'OK' });
+                Object.defineProperty(this, 'readyState', { value: 4 });
+            }
+        } else {
+            originalXHRSend.call(this, body);
+        }
     };
+}
+
+
+function processHTMLResources(doc, basePath) {
+    const blobUrlMap = Object.fromEntries(
+        Object.entries(fileCache).map(([path, blob]) =>
+            [path, URL.createObjectURL(blob)]
+        )
+    );
+
+    const resourceAttributes = ['src', 'href', 'poster', 'data'];
+    const selector = resourceAttributes
+        .map(attr => `[${attr}]:not([${attr}^="http"]):not([${attr}^="data:"])`)
+        .join(', ');
+
+    doc.querySelectorAll(selector).forEach(element => {
+        resourceAttributes.forEach(attr => {
+            const value = element.getAttribute(attr);
+            if (value) {
+                const fullPath = resolvePath(value, basePath);
+                if (blobUrlMap[fullPath]) {
+                    element.setAttribute(attr, blobUrlMap[fullPath]);
+                    console.log(`Atualizado ${element.tagName}[${attr}] para: ${blobUrlMap[fullPath]}`);
+                } else {
+                    console.warn(`Recurso não encontrado para ${element.tagName}[${attr}]: ${fullPath}`);
+                }
+            }
+        });
+    });
+
+    doc.addEventListener('unload', () => {
+        Object.values(blobUrlMap).forEach(url => URL.revokeObjectURL(url));
+    }, { once: true });
+
+    replaceInlineScripts(doc, blobUrlMap, basePath);
+}
+
+function replaceInlineScripts(doc, blobUrlMap, basePath) {
+    const scripts = doc.querySelectorAll('script:not([src])');
+    scripts.forEach(script => {
+        let code = script.textContent;
+
+        Object.entries(blobUrlMap).forEach(([path, blobUrl]) => {
+            const resolvedPath = resolvePath(path, basePath);
+            const regex = new RegExp(`(['"\`])${resolvedPath}\\1`, 'g');
+            code = code.replace(regex, `'${blobUrl}'`);
+        });
+
+        const newScript = document.createElement('script');
+        newScript.textContent = code;
+        script.replaceWith(newScript);
+    });
+}
+
+async function processIweTag(doc, basePath, iframeElement) {
+    const iweTag = doc.querySelector('iwe[src]');
+    if (!iweTag) return false; 
+
+    const src = iweTag.getAttribute('src');
+    const resolvedPath = resolvePath(src, basePath);
+
+    if (!fileCache[resolvedPath]) {
+        console.error(`Arquivo ${resolvedPath} não encontrado no fileCache`);
+        return false;
+    }
+
+    const htmlBlob = fileCache[resolvedPath];
+    const htmlText = await htmlBlob.text();
     
-    iframeWindow.addEventListener('click', (e) => {
-        const a = e.target.closest('a');
-        if (a && a.href && !a.href.startsWith('http') && !a.href.startsWith('data:')) {
-            e.preventDefault();
-            const href = new URL(a.href, 'http://fakebase').pathname.slice(1); 
-            if (fileCache[href]) {
-                iframeWindow.history.pushState({ path: href }, '', href);
-                loadFile(href);
+    const parser = new DOMParser();
+    const newDoc = parser.parseFromString(htmlText, 'text/html');
+   
+    processHTMLResources(newDoc, resolvedPath);
+   
+    const iframeDoc = iframeElement.contentDocument || iframeElement.contentWindow.document;
+    iframeDoc.open();
+    iframeDoc.write(newDoc.documentElement.outerHTML);
+    iframeDoc.close();
+
+    return true;
+}
+
+async function Zemuframeweb(file, iframeElement) {
+    try {
+        await loadJSZip();
+
+        Object.keys(fileCache).forEach(key => delete fileCache[key]);
+        currentBasePath = '';
+
+        const arrayBuffer = await file.arrayBuffer();
+
+        const zip = new JSZip();
+        const zipContent = await zip.loadAsync(arrayBuffer);
+
+        for (const [relativePath, zipEntry] of Object.entries(zipContent.files)) {
+            if (!zipEntry.dir) {
+                fileCache[relativePath] = await zipEntry.async('blob');
             }
         }
-    });
-                }
+
+        const indexPath = Object.keys(fileCache).find(path =>
+            path.toLowerCase().endsWith('index.html')
+        );
+
+        if (!indexPath) {
+            throw new Error('index.html não encontrado no arquivo ZIP');
+        }
+
+        currentBasePath = indexPath.substring(0, indexPath.lastIndexOf('/') + 1) || '';
+        console.log('currentBasePath definido como:', currentBasePath);
+
+        const indexBlob = fileCache[indexPath];
+        const indexText = await indexBlob.text();
+
+        iframeElement.src = 'about:blank';
+        const doc = iframeElement.contentDocument || iframeElement.contentWindow.document;
+        doc.open();
+        doc.write('<html><head></head><body>Loading...</body></html>');
+        doc.close();
+
+        const parser = new DOMParser();
+        const tempDoc = parser.parseFromString(indexText, 'text/html');
+        
+        interceptFetch(doc);
+        
+        const iweProcessed = await processIweTag(tempDoc, indexPath, iframeElement);
+
+        if (!iweProcessed) {           
+            processHTMLResources(tempDoc, indexPath);
+            doc.open();
+            doc.write(tempDoc.documentElement.outerHTML);
+            doc.close();
+        }
+
+        iframeElement.addEventListener('unload', () => {
+            Object.values(fileCache).forEach(blob => URL.revokeObjectURL(blob));
+        }, { once: true });
+
+        return { success: true };
+
+    } catch (error) {
+        console.error('Erro ao processar o ZIP:', error);
+        iframeElement.contentDocument.write(`<h1>Erro</h1><p>${error.message}</p>`);
+        return { success: false, error: error.message };
+    }
+}
+
+
+function getMimeType(filePath) {
+    const extension = filePath.split('.').pop().toLowerCase();
+    const mimeTypes = {
+        'html': 'text/html',
+        'js': 'application/javascript',
+        'css': 'text/css',
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'svg': 'image/svg+xml',
+        'ico': 'image/x-icon',
+        'json': 'application/json',
+        'glb': 'model/gltf-binary',
+        'gltf': 'model/gltf+json',
+    };
+    return mimeTypes[extension] || 'application/octet-stream';
+                                             }
